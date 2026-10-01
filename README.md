@@ -125,14 +125,18 @@ Clone the repository and install dependencies:
 git clone https://github.com/darkact-creator/DarkAct.git
 cd DarkAct
 
-# Create conda environment
-conda create -n darkact python=3.9
-conda activate darkact
+# Create Python virtual environment (venv)
+python3 -m venv darkact_env
+source darkact_env/bin/activate
+
+# Upgrade pip
+pip install --upgrade pip
+
+# Install PyTorch with CUDA (e.g. CUDA 12.1 / 11.8)
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
 
 # Install dependencies
 pip install -r requirements.txt
-# Install PyTorch (match your CUDA version)
-pip install torch==2.0.1 torchvision==0.15.2 torchaudio==2.0.2 --index-url https://download.pytorch.org/whl/cu118
 ```
 
 ### 2. Dataset Preparation

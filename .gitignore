@@ -1,0 +1,25 @@
+# Virtual environments
+darkact_env/
+venv/
+.env/
+env/
+
+# Python cache & bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+
+# Datasets and checkpoints
+data/
+data_mock/
+tests_tmp_data/
+checkpoints/
+outputs/
+logs/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
