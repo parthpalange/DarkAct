@@ -129,8 +129,6 @@ cd DarkAct
 python3 -m venv darkact_env
 source darkact_env/bin/activate
 
-source ~/.config/jupyterlab-desktop/jlab_server/bin/activate
-
 # Upgrade pip
 pip install --upgrade pip
 

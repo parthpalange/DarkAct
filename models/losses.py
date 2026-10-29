@@ -1,5 +1,4 @@
 import math
-from typing import Tuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -24,17 +23,15 @@ class SobelEdgeLoss(nn.Module):
         self.register_buffer("kx", kx.view(1, 1, 3, 3))
         self.register_buffer("ky", ky.view(1, 1, 3, 3))
 
-    def _edge_gradient(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def _edge_gradient(self, x: torch.Tensor) -> torch.Tensor:
         # x: (B, C, H, W)
         B, C, H, W = x.shape
         x_reshaped = x.view(B * C, 1, H, W)
         gx = F.conv2d(x_reshaped, self.kx, padding=1)
         gy = F.conv2d(x_reshaped, self.ky, padding=1)
-        # Safe normalization to avoid division by zero or NaN gradients
-        norm = torch.sqrt(gx ** 2 + gy ** 2 + 1e-6)
-        gx_norm = (gx / norm).view(B, C, H, W)
-        gy_norm = (gy / norm).view(B, C, H, W)
-        return gx_norm, gy_norm
+        # Gradient vector: shape (B, C, 2, H, W)
+        grad = torch.stack([gx, gy], dim=2).view(B, C, 2, H, W)
+        return grad
 
     def forward(self, Y_r: torch.Tensor, Y_t: torch.Tensor) -> torch.Tensor:
         # Y_r, Y_t: (B, C, T, H, W) or (B, C, H, W)
@@ -42,12 +39,11 @@ class SobelEdgeLoss(nn.Module):
             Y_r = Y_r.mean(dim=2)  # Average across temporal dimension
             Y_t = Y_t.mean(dim=2)
             
-        gx_r, gy_r = self._edge_gradient(Y_r)
-        gx_t, gy_t = self._edge_gradient(Y_t)
+        grad_r = self._edge_gradient(Y_r)  # (B, C, 2, H, W)
+        grad_t = self._edge_gradient(Y_t)  # (B, C, 2, H, W)
         
-        # Dot product of normalized gradient orientations = cosine similarity
-        cos_sim = gx_r * gx_t + gy_r * gy_t
-        cos_sim = cos_sim.clamp(-1.0, 1.0)
+        # Cosine similarity along gradient orientation (dim 2)
+        cos_sim = F.cosine_similarity(grad_r, grad_t, dim=2, eps=1e-6)  # (B, C, H, W)
         loss = 1.0 - cos_sim.mean()
         return loss
 
@@ -56,23 +52,24 @@ class ModalityContrastiveLoss(nn.Module):
     """
     Modality Contrastive Loss (L_MC):
     L_MC = log(1 + sum_{i != j} exp( (Y_i^r . Y_j^t) / tau - (Y_i^r . Y_i^t) / tau ))
-    Numerically stabilized with clamping to prevent exp() overflow.
     """
     def __init__(self, temperature: float = 0.07):
         super().__init__()
         self.temperature = temperature
 
     def forward(self, Y_r: torch.Tensor, Y_t: torch.Tensor) -> torch.Tensor:
+        # Y_r, Y_t: (B, C, T, H, W)
         B = Y_r.shape[0]
         if B <= 1:
             return torch.tensor(0.0, device=Y_r.device, requires_grad=True)
             
+        # Global average pool to get feature vectors: (B, C)
         feat_r = F.adaptive_avg_pool3d(Y_r, (1, 1, 1)).view(B, -1)
         feat_t = F.adaptive_avg_pool3d(Y_t, (1, 1, 1)).view(B, -1)
         
         # Normalize
-        feat_r = F.normalize(feat_r, p=2, dim=1, eps=1e-6)
-        feat_t = F.normalize(feat_t, p=2, dim=1, eps=1e-6)
+        feat_r = F.normalize(feat_r, p=2, dim=1)
+        feat_t = F.normalize(feat_t, p=2, dim=1)
         
         # Similarity matrix: (B, B)
         sim_matrix = torch.matmul(feat_r, feat_t.t()) / self.temperature
@@ -80,15 +77,15 @@ class ModalityContrastiveLoss(nn.Module):
         # Positive pairs: diagonal (B,)
         pos = torch.diag(sim_matrix)
         
-        # Difference with positive: (B, B) clamped to prevent exp overflow
-        diff = (sim_matrix - pos.unsqueeze(1)).clamp(max=20.0)
+        # Difference with positive: (B, B)
+        diff = sim_matrix - pos.unsqueeze(1)
         
         # Mask out diagonal (i == j)
         mask = ~torch.eye(B, dtype=torch.bool, device=Y_r.device)
         exp_diff = torch.exp(diff) * mask.float()
         
         # L_MC = log(1 + sum_{i != j} exp(...))
-        loss = torch.log(1.0 + exp_diff.sum(dim=1).clamp(min=0.0)).mean()
+        loss = torch.log(1.0 + exp_diff.sum(dim=1)).mean()
         return loss
 
 
@@ -103,6 +100,7 @@ class SSIMLoss(nn.Module):
         self.C2 = 0.03 ** 2
 
     def forward(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+        # Average across temporal dimension if 5D
         if x.dim() == 5:
             x = x.mean(dim=2)
             y = y.mean(dim=2)
@@ -114,15 +112,14 @@ class SSIMLoss(nn.Module):
         mu_y_sq = mu_y ** 2
         mu_xy = mu_x * mu_y
         
-        sigma_x_sq = (F.avg_pool2d(x * x, kernel_size=self.window_size, stride=1, padding=self.window_size // 2) - mu_x_sq).clamp(min=0.0)
-        sigma_y_sq = (F.avg_pool2d(y * y, kernel_size=self.window_size, stride=1, padding=self.window_size // 2) - mu_y_sq).clamp(min=0.0)
+        sigma_x_sq = F.avg_pool2d(x * x, kernel_size=self.window_size, stride=1, padding=self.window_size // 2) - mu_x_sq
+        sigma_y_sq = F.avg_pool2d(y * y, kernel_size=self.window_size, stride=1, padding=self.window_size // 2) - mu_y_sq
         sigma_xy = F.avg_pool2d(x * y, kernel_size=self.window_size, stride=1, padding=self.window_size // 2) - mu_xy
         
-        num = (2 * mu_xy + self.C1) * (2 * sigma_xy + self.C2)
-        den = (mu_x_sq + mu_y_sq + self.C1) * (sigma_x_sq + sigma_y_sq + self.C2) + 1e-5
-        ssim_map = (num / den).clamp(-1.0, 1.0)
+        ssim_map = ((2 * mu_xy + self.C1) * (2 * sigma_xy + self.C2)) / \
+                   ((mu_x_sq + mu_y_sq + self.C1) * (sigma_x_sq + sigma_y_sq + self.C2) + 1e-8)
                    
-        return (1.0 - ssim_map.mean()).clamp(min=0.0)
+        return 1.0 - ssim_map.mean()
 
 
 class DarkActLoss(nn.Module):

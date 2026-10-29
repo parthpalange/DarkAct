@@ -42,10 +42,8 @@ def parse_args():
                         help="AdamW weight decay")
     parser.add_argument("--workers", type=int, default=4,
                         help="Number of dataloader worker processes")
-    parser.add_argument("--resume", type=str, default="",
-                        help="Path to checkpoint to resume training from")
     parser.add_argument("--ckpt_path", type=str, default="./checkpoints/best_model.pth",
-                        help="Checkpoint path for evaluation")
+                        help="Checkpoint path for evaluation or resuming")
     parser.add_argument("--output_dir", type=str, default="./outputs",
                         help="Directory to save logs and checkpoints")
     parser.add_argument("--no_maa", action="store_true",
@@ -109,13 +107,7 @@ def train_one_epoch(
             msp_classifier=raw_model.msp_classifier
         )
         total_loss = loss_dict["loss"]
-        if torch.isnan(total_loss) or torch.isinf(total_loss):
-            logger.warning(f"Warning: NaN/Inf detected in loss at step {step + 1}. Skipping step.")
-            optimizer.zero_grad()
-            continue
-            
         total_loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
 
         acc1, acc5 = accuracy(out["logits"], targets, topk=(1, 5))
@@ -256,16 +248,9 @@ def main():
 
     checkpoint_dir = os.path.join(args.output_dir, "checkpoints")
     best_acc = 0.0
-    start_epoch = 0
-
-    if args.resume and os.path.isfile(args.resume):
-        logger.info(f"Resuming training from checkpoint: {args.resume}")
-        raw_model = model.module if hasattr(model, "module") else model
-        start_epoch = load_checkpoint(args.resume, raw_model, optimizer)
-        logger.info(f"Resuming from epoch {start_epoch}")
 
     logger.info("Starting training loop...")
-    for epoch in range(start_epoch, args.epochs):
+    for epoch in range(args.epochs):
         train_loss, train_acc1, train_acc5 = train_one_epoch(
             model=model,
             dataloader=train_loader,

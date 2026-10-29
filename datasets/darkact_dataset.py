@@ -136,25 +136,12 @@ class DarkActDataset(Dataset):
                 for line in f:
                     parts = line.strip().split()
                     if len(parts) >= 3:
-                        # Handle both paths relative to data_path and paths relative to data_path/videos
-                        p0 = parts[0].lstrip("/").lstrip("\\")
-                        p1 = parts[1].lstrip("/").lstrip("\\")
-                        if p0.startswith("videos/") or p0.startswith("videos\\"):
-                            rgb_path = os.path.join(self.data_path, p0)
-                            thermal_path = os.path.join(self.data_path, p1)
-                        else:
-                            rgb_path = os.path.join(self.data_path, "videos", p0)
-                            thermal_path = os.path.join(self.data_path, "videos", p1)
-
-                        if not os.path.isfile(rgb_path) or not os.path.isfile(thermal_path):
-                            # Try direct relative to data_path
-                            direct_rgb = os.path.join(self.data_path, p0)
-                            direct_th = os.path.join(self.data_path, p1)
-                            if os.path.isfile(direct_rgb) and os.path.isfile(direct_th):
-                                rgb_path = direct_rgb
-                                thermal_path = direct_th
-                            else:
-                                raise FileNotFoundError(f"Video listed in {ann_file} not found: {rgb_path} or {thermal_path}")
+                        # Annotation paths are relative to <data_path>/videos
+                        rgb_path = os.path.join(self.data_path, "videos", parts[0])
+                        thermal_path = os.path.join(self.data_path, "videos", parts[1])
+                        for p in (rgb_path, thermal_path):
+                            if not os.path.isfile(p):
+                                raise FileNotFoundError(f"Video listed in {ann_file} not found: {p}")
                         label = int(parts[2])
                         samples.append({"rgb": rgb_path, "thermal": thermal_path, "label": label})
         else:
